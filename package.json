@@ -1,0 +1,29 @@
+{
+  "name": "@saltcorn/applepay",
+  "version": "0.1.0",
+  "description": "Payment processing with ApplePay",
+  "main": "index.js",
+  "dependencies": {
+    "@saltcorn/data": "^0.8.3",
+    "@saltcorn/markup": "^0.8.3"
+  },
+  "author": "Tom Nielsen",
+  "license": "MIT",
+  "repository": "github:saltcorn/applepay",
+  "eslintConfig": {
+    "extends": "eslint:recommended",
+    "parserOptions": {
+      "ecmaVersion": 2020
+    },
+    "env": {
+      "node": true,
+      "es6": true
+    },
+    "rules": {
+      "no-unused-vars": "off",
+      "no-case-declarations": "off",
+      "no-empty": "warn",
+      "no-fallthrough": "warn"
+    }
+  }
+}
