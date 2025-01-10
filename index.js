@@ -26,6 +26,14 @@ const configuration_workflow = () => {
               : "",
             fields: [
               {
+                label: "Merchant domain verification",
+                sublabel:
+                  "Contents of the merchant domain verification file to be hosted at .well-known/apple-developer-merchantid-domain-association",
+                type: "String",
+                name: "merchant_verification_contents",
+                fieldview: "textarea",
+              },
+              {
                 name: "mode",
                 label: "Mode",
                 type: "String",
@@ -56,7 +64,7 @@ const actions = () => ({
     configFields: async ({ table }) => {
       const fields = table ? await table.getFields() : [];
 
-      const cbviews = await View.find({ viewtemplate: "Paypal Callback" });
+      const cbviews = await View.find({ viewtemplate: "ApplePay Callback" });
       const amount_options = fields
         .filter((f) => ["Float", "Integer", "Money"].includes(f.type?.name))
         .map((f) => f.name);
@@ -275,15 +283,33 @@ const viewtemplates = () => [
         ],
       };
 
-     
-    
-      return "Something apple here"
+      return "Something apple here";
     },
   },
 ];
 
+const routes = (config) => {
+  return [
+    {
+      url: "/.well-known/apple-developer-merchantid-domain-association.txt",
+      method: "get",
+      callback: async ({ req, res }) => {
+        if (config?.merchant_verification_contents)
+          res
+            .status(200)
+            .text(
+              config?.merchant_verification_contents ||
+                "missing merchant verification content"
+            );
+        else res.status(400).text("missing merchant verification content");
+      },
+    },
+  ];
+};
+
 module.exports = {
   sc_plugin_api_version: 1,
+  routes,
   configuration_workflow,
   actions,
   viewtemplates,
