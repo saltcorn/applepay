@@ -294,14 +294,12 @@ const routes = (config) => {
       url: "/.well-known/apple-developer-merchantid-domain-association.txt",
       method: "get",
       callback: async ({ req, res }) => {
-        if (config?.merchant_verification_contents)
-          res
-            .status(200)
-            .text(
-              config?.merchant_verification_contents ||
-                "missing merchant verification content"
-            );
-        else res.status(400).text("missing merchant verification content");
+        if (config?.merchant_verification_contents) {
+          res.text(config?.merchant_verification_contents);
+        } else {
+          res.status(400);
+          res.text("missing merchant verification content");
+        }
       },
     },
   ];
