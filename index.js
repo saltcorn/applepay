@@ -1,50 +1,41 @@
-const fs = require("fs");
-const https = require("https");
 const Workflow = require("@saltcorn/data/models/workflow");
 const Form = require("@saltcorn/data/models/form");
-const Table = require("@saltcorn/data/models/table");
 const View = require("@saltcorn/data/models/view");
-const {
-  eval_expression,
-  add_free_variables_to_joinfields,
-  freeVariables,
-} = require("@saltcorn/data/models/expression");
 const { getState } = require("@saltcorn/data/db/state");
-const { interpolate } = require("@saltcorn/data/utils");
 
-const configuration_workflow = () =>
-  new Workflow({
+const configuration_workflow = () => {
+  const cfg_base_url = getState().getConfig("base_url");
+  return new Workflow({
     steps: [
       {
-        name: "Apple Pay Configuration",
+        name: "Apple Pay with PayPal",
         form: () =>
           new Form({
             labelCols: 3,
+            blurb: !cfg_base_url
+              ? "You should set the 'Base URL' configration property. "
+              : "",
             fields: [
               {
-                name: "merchant_id",
-                label: "Merchant Identifier",
+                name: "client_id",
+                label: "PayPal Client ID",
                 type: "String",
                 required: true,
-                sublabel:
-                  "Copy from Apple Developer → Certificates, IDs & Profiles",
               },
               {
-                name: "display_name",
-                label: "Display Name",
+                name: "client_secret",
+                label: "PayPal Client Secret",
                 type: "String",
                 required: true,
-                sublabel: "Shown to customers in the Apple Pay sheet",
               },
               {
-                name: "supported_networks",
-                label: "Supported Networks",
+                name: "environment",
+                label: "Environment",
                 type: "String",
                 attributes: {
-                  options: ["visa", "masterCard", "amex", "discover"],
-                  multiple: true,
+                  options: ["sandbox", "production"],
                 },
-                required: true,
+                default: "sandbox",
               },
               {
                 name: "merchant_domain_file",
@@ -54,118 +45,55 @@ const configuration_workflow = () =>
                 sublabel:
                   "Paste the contents of apple-developer-merchantid-domain-association",
               },
-              {
-                name: "identity_cert_path",
-                label: "Identity PKCS#12 (.p12 / .pfx) path",
-                type: "String",
-                required: true,
-                sublabel:
-                  "Absolute path on server to the Merchant Identity certificate bundle",
-              },
-              {
-                name: "identity_cert_password",
-                label: "Identity cert password",
-                type: "String",
-                required: true,
-              },
             ],
           }),
       },
     ],
   });
+};
 
 const actions = () => ({
-  applepay_create_session: {
-    configFields: async ({ table }) => {
-      const fields = table ? await table.getFields() : [];
-      const amount_options = fields
-        .filter((f) => ["Float", "Integer", "Money"].includes(f.type?.name))
-        .map((f) => f.name);
-      amount_options.push("Formula");
-
+  initiate_applepay: {
+    configFields: async () => {
+      const payViews = await View.find({});
       return [
         {
-          name: "amount_field",
-          label: "Amount field",
-          type: "String",
-          required: true,
-          attributes: { options: amount_options },
-        },
-        {
-          name: "amount_formula",
-          label: "Amount formula",
-          type: "String",
-          fieldview: "textarea",
-          class: "validate-expression",
-          showIf: { amount_field: "Formula" },
-        },
-        {
           name: "currency",
-          label: "Currency (ISO 4217)",
+          label: "Currency",
           type: "String",
           default: "USD",
           required: true,
         },
         {
-          name: "order_id_field",
-          label: "Order ID field",
+          name: "amount",
+          label: "Amount",
+          type: "Float",
+          required: true,
+        },
+        {
+          name: "applepay_button_view",
+          label: "ApplePay Button View",
           type: "String",
           required: true,
-          attributes: { options: fields.map((f) => f.name) },
+          attributes: {
+            options: payViews.map((f) => f.name),
+          },
         },
       ];
     },
-
     run: async ({
-      table,
-      req,
-      row,
-      configuration: { currency, amount_field, amount_formula, order_id_field },
+      configuration: { applepay_button_view, currency, amount },
     }) => {
-      let amount;
-
-      if (amount_field === "Formula") {
-        const joinFields = {};
-        add_free_variables_to_joinfields(
-          freeVariables(amount_formula),
-          joinFields,
-          table.fields
-        );
-        const row_eval =
-          Object.keys(joinFields).length > 0
-            ? (
-                await table.getJoinedRows({
-                  where: { id: row.id },
-                  joinFields,
-                })
-              )[0]
-            : row;
-        amount = parseFloat(
-          eval_expression(amount_formula, row_eval, req?.user)
-        ).toFixed(2);
-      } else if (amount_field.includes(".")) {
-        const fk_field = table.getField(amount_field);
-        const fk_table = Table.findOne(fk_field.table_id);
-        const fk_row = await fk_table.getRow({
-          [fk_table.pk_name]: row[amount_field.split(".")[0]],
-        });
-        amount = (+fk_row[fk_field.name]).toFixed(2);
-      } else {
-        amount = (+row[amount_field]).toFixed(2);
-      }
-
       return {
-        type: "applepay",
-        amount,
-        currency: interpolate(currency, row),
-        order_id: row[order_id_field],
-        row_id: row.id,
+        goto: `http://localhost:3000/view/${applepay_button_view}?amount=${amount}&currency=${
+          currency || "USD"
+        }`,
       };
     },
   },
 });
 
-const viewtemplates = () => [
+const viewtemplates = (pluginCfg) => [
   {
     name: "Apple Pay Button",
     display_state_form: false,
@@ -173,13 +101,13 @@ const viewtemplates = () => [
       new Workflow({
         steps: [
           {
-            name: "Button Configuration",
+            name: "Button Settings",
             form: () =>
               new Form({
                 fields: [
                   {
                     name: "button_style",
-                    label: "Button style",
+                    label: "Button Style",
                     type: "String",
                     attributes: {
                       options: ["black", "white", "white-outline"],
@@ -188,10 +116,17 @@ const viewtemplates = () => [
                   },
                   {
                     name: "button_type",
-                    label: "Button type",
+                    label: "Button Type",
                     type: "String",
                     attributes: {
-                      options: ["plain", "buy", "donate", "checkout"],
+                      options: [
+                        "buy",
+                        "donate",
+                        "plain",
+                        "check-out",
+                        "set-up",
+                        "book",
+                      ],
                     },
                     default: "buy",
                   },
@@ -200,150 +135,220 @@ const viewtemplates = () => [
           },
         ],
       }),
-
-    run: async (table_id, viewname, configuration, state, { req }) => {
-      const cfg = getState().getConfig("applepay") || {};
-
+    run: async (table_id, viewname, cfg, state, { req }) => {
+      const csrfToken = req?.csrfToken();
       return `
-        <script src="/plugins/public/apple-pay-sdk.js"></script>
-        <script id="applepay-config" type="application/json">
-        ${JSON.stringify({
-          merchant_id: cfg.merchant_id,
-          display_name: cfg.display_name,
-          supported_networks: cfg.supported_networks,
-          currency: configuration.currency || "USD",
-          locale: req?.language || "en-US",
-        })}
-        </script>
+        <html>
+          <head>
+            <style>
+              .apple-pay-button {
+                display: inline-block;
+                -webkit-appearance: -apple-pay-button;
+                -apple-pay-button-type: ${cfg.button_type || "buy"};
+              }
+              .apple-pay-button-black {
+                -apple-pay-button-style: black;
+              }
+              .apple-pay-button-white {
+                -apple-pay-button-style: white;
+              }
+              .apple-pay-button-white-outline {
+                -apple-pay-button-style: white-outline;
+              }
+            </style>
+            <script src="https://www.paypal.com/sdk/js?client-id="${
+              pluginCfg.client_id
+            }"&components=applepay"></script>
+            <script src="https://applepay.cdn-apple.com/jsapi/v1/apple-pay-sdk.js"></script>
+          </head>
+          <body>
+            Hello World! <br />
+            <hr />
+            <div class="apple-pay-button apple-pay-button-${
+              cfg.button_style
+            }"></div>
 
-        <apple-pay-button
-          buttonstyle="${configuration.button_style || "black"}"
-          type="${configuration.button_type || "buy"}"
-          locale="${req?.language || "en-US"}"
-        ></apple-pay-button>
-        <script src="/plugins/public/applepay.js"></script>`;
-      // https://applepaydemo.apple.com/apple-pay-js-api, apple paybutton config + cdn link for js script
-    },
-  },
-
-  {
-    name: "Apple Pay Callback",
-    display_state_form: false,
-    configuration_workflow: () =>
-      new Workflow({
-        steps: [
-          {
-            name: "Callback Configuration",
-            form: async (context) => {
-              const table = Table.findOne({ id: context.table_id });
-              const views = await View.find({ table_id: table.id });
-
-              return new Form({
-                fields: [
-                  {
-                    name: "paid_field",
-                    label: "Paid field (Bool)",
-                    type: "String",
-                    attributes: {
-                      options: table.fields
-                        .filter((f) => f.type?.name === "Bool")
-                        .map((f) => f.name),
+            <script>
+              document
+                .querySelector(".apple-pay-button")
+                .addEventListener("click", async () => {
+                  // Test Request
+                  try {
+                  const response = await fetch("/applepay/test_req", {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "X-CSRF-Token": "${csrfToken || ""}",
                     },
-                  },
-                  {
-                    name: "success_view",
-                    label: "Redirect to view",
-                    type: "String",
-                    required: true,
-                    attributes: {
-                      options: views
-                        .filter((v) => v.name !== context.viewname)
-                        .map((v) => v.name),
-                    },
-                  },
-                ],
-              });
-            },
-          },
-        ],
-      }),
+                    body: JSON.stringify({
+                      client_id: ${pluginCfg.client_id},
+                      environment: "${pluginCfg.environment || "sandbox"}",
+                    }),
+                  });
+                  
+                  const data = await response.json();
+                  console.log("Test request response:", data);
+                  if (!window.ApplePaySession) {
+                    alert("Apple Pay not available");
+                    return;
+                  }
+                  console.log("Apple Pay Session available");
+                  } catch (error) {
+                    console.error("Test request failed:", error);
+                    alert("Test request failed. Check console for details.");
+                    return;
+                  }
+                  // Use PayPal as processor
+                  const applepay = paypal.Applepay();
+                  const config = await applepay.config();
 
-    run: async (
-      table_id,
-      viewname,
-      { paid_field, success_view },
-      state,
-      { req }
-    ) => {
-      if (state.status === "success" && paid_field) {
-        const table = Table.findOne({ id: table_id });
-        await table.updateRow({ [paid_field]: true }, state.row_id);
-      }
-      return { goto: `/view/${success_view}?id=${state.row_id}` };
+                  if (!config.isEligible) {
+                    alert("Apple Pay not eligible");
+                    return;
+                  }
+
+                  const session = new ApplePaySession(3, {
+                    countryCode: "US",
+                    currencyCode: "${state.currency}",
+                    merchantCapabilities: ["supports3DS"],
+                    supportedNetworks: ["visa", "masterCard", "amex", "discover"],
+                    total: {
+                      label: "Store",
+                      amount: "${state.amount || "10.00"}",
+                    },
+                  });
+
+                  session.onvalidatemerchant = async (event) => {
+                    try {
+                      const validation = await applepay.validateMerchant({
+                        validationUrl: event.validationURL,
+                        displayName: "Store",
+                      });
+                      session.completeMerchantValidation(validation.merchantSession);
+                    } catch (e) {
+                      console.error("Validation failed", e);
+                      session.abort();
+                    }
+                  };
+
+                  session.onpaymentauthorized = async (event) => {
+                    try {
+                      // Create order
+                      const order = await fetch("/applepay/create_order", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          amount: "10.00",
+                          currency: "USD",
+                        }),
+                      }).then((res) => res.json());
+
+                      // Confirm with PayPal
+                      await applepay.confirmOrder({
+                        orderId: order.id,
+                        token: event.payment.token,
+                      });
+
+                      session.completePayment(ApplePaySession.STATUS_SUCCESS);
+                      window.location.href = "/view/thankyou";
+                    } catch (e) {
+                      console.error("Payment failed", e);
+                      session.completePayment(ApplePaySession.STATUS_FAILURE);
+                    }
+                  };
+
+                  session.begin();
+                });
+            </script>
+          </body>
+        </html>
+      `;
     },
   },
 ];
 
-const routes = (config) => [
+const routes = (pluginCfg) => [
   {
     url: "/.well-known/apple-developer-merchantid-domain-association",
     method: "get",
     callback: ({ res }) => {
-      res.type("text/plain").send(config.merchant_domain_file || "");
+      console.log(
+        "ApplePay should run this endpoint automatically. Not yet checked this though."
+      );
+      res.type("text/plain").send(pluginCfg.merchant_domain_file || "");
     },
   },
   {
-    url: "/applepay/validate",
-    method: "post",
-    callback: async ({ req, res }) => {
-      const { validationURL } = req.body;
-      const cfg = getState().getConfig("applepay");
-
-      const p12 = fs.readFileSync(cfg.identity_cert_path);
-      const tlsAgent = new https.Agent({
-        pfx: p12,
-        passphrase: cfg.identity_cert_password,
+    url: "/test",
+    method: "get",
+    callback: async ({ res }) => {
+      res.send({
+        message: "Test request successful",
+        client_id: pluginCfg.client_id,
+        environment: pluginCfg.environment,
       });
-
-      const postData = JSON.stringify({
-        merchantIdentifier: cfg.merchant_id,
-        domainName: req.hostname,
-        displayName: cfg.display_name,
-      });
-
-      const requestOpts = {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        agent: tlsAgent,
-      };
-
-      const appleRes = await new Promise((resolve, reject) => {
-        const apReq = https.request(validationURL, requestOpts, (resp) => {
-          let data = "";
-          resp.on("data", (chunk) => (data += chunk));
-          resp.on("end", () =>
-            resp.statusCode === 200
-              ? resolve(JSON.parse(data))
-              : reject(new Error(`Apple response ${resp.statusCode}`))
-          );
-        });
-        apReq.on("error", reject);
-        apReq.write(postData);
-        apReq.end();
-      });
-
-      res.send(appleRes);
     },
   },
   {
-    url: "/applepay/process",
+    url: "/applepay/test_req",
+    method: "post",
+    callback: async ({ res }) => {
+      // console.log({ req });
+      res.send({
+        message: "Test request successful",
+        client_id: pluginCfg.client_id,
+        environment: pluginCfg.environment,
+      });
+    },
+  },
+  {
+    url: "/applepay/create_order",
     method: "post",
     callback: async ({ req, res }) => {
-      const { token, row_id, amount, currency } = req.body;
+      const endpoint =
+        pluginCfg.environment === "sandbox"
+          ? "https://api-m.sandbox.paypal.com"
+          : "https://api-m.paypal.com";
 
-      // While testing, might have to forward to a PSP that supports Apple Pay eg srtripe or adyen, incase appple pay is requires an external PSP
+      try {
+        // Getting access token
+        const auth = Buffer.from(
+          `${pluginCfg.client_id}:${pluginCfg.client_secret}`
+        ).toString("base64");
+        const { access_token } = await fetch(`${endpoint}/v1/oauth2/token`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization: `Basic ${auth}`,
+          },
+          body: "grant_type=client_credentials",
+        }).then((res) => res.json());
 
-      res.send({ status: "success", row_id });
+        // Creatinng order
+        const order = await fetch(`${endpoint}/v2/checkout/orders`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${access_token}`,
+          },
+          body: JSON.stringify({
+            intent: "CAPTURE",
+            purchase_units: [
+              {
+                amount: {
+                  currency_code: req.body.currency,
+                  value: req.body.amount,
+                },
+              },
+            ],
+          }),
+        }).then((res) => res.json());
+
+        res.send(order);
+      } catch (e) {
+        console.error("Order creation failed", e);
+        res.status(500).send({ error: "Order creation failed" });
+      }
     },
   },
 ];
